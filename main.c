@@ -302,23 +302,37 @@ Timeline newTimeline(Process *processes, int processNum){
 }
 
 // Make job. If given interval is bigger than given process's length then make interval lower
-void doJobFor(Timeline *timeline, Process *process, int interval){
+// Parameter 'process' can be NULL if we intended to CPU kills time
+void doJobFor(Timeline *timeline, Process *process, int duration){
 	
-	if(interval <= 0){ // Interval validation
-		printf("Invalid interval(%d) got in function doJobFor\n", interval);
+	// Critical validation
+	if(duration <= 0){ // Duration validation
+		printf("Invalid duration interval(%d) got in function doJobFor\n", duration);
 		return;
 	}
-	else if(process != NULL && process->CPUburstleft < interval){
-		interv
+	else if(process != NULL && process->CPUburstleft == 0){ // Tried to give job for burned process
+		printf("Given "); reprSingle(process); printf(" is already burned out in function doJobFor\n");
+		return;
 	}
 	
-	if(timeline->timelinesize == 0){ // Append new one
-		timeline->interval[timeline->timelinesize][0] = timeline->timestamp;
-		timeline->timestamp += interval;
+	// Weak validation
+	if(process != NULL && process->CPUburstleft < duration){ // Duration modification
+		duration = process->CPUburstleft;
+	}
+	
+	// Process modification
+	if(process != NULL) process->CPUburstleft -= duration;
+	
+	// Timeline modification
+	timeline->timestamp += duration;
+	if(timeline->timelinesize == 0 || timeline->usedProcesses[timeline->timelinesize - 1] != process){ // Append new one
+		timeline->usedProcesses[timeline->timelinesize] = process;
+		timeline->interval[timeline->timelinesize][0] = timeline->timestamp - duration;
 		timeline->interval[timeline->timelinesize][1] = timeline->timestamp;
+		timeline->timelinesize++;
 	}
 	else{ // Modify latest one
-		
+		timeline->interval[timeline->timelinesize - 1][1] = timeline->timestamp;
 	}
 }
 
@@ -327,10 +341,18 @@ void doJobFor(Timeline *timeline, Process *process, int interval){
 
 // First Come First Serve
 Timeline ScheduleFCFS(Process *processes, int processNum){
-	
-	// Sort first
+	Timeline timeline = newTimeline(processes, processNum);
 	selectionSort(processes, 0, processNum, criteria_FCFS);
-	
+	for(int i=0; i<processNum; i++){
+		if(timeline.timestamp < (processes+i)->arrivalTime)
+			doJobFor(&timeline, NULL, (processes+i)->arrivalTime - timeline.timestamp);
+		doJobFor(&timeline, processes+i, (processes+i)->CPUburstleft);
+	}
+	return timeline;
+}
+
+// Shortest Job First
+Timeline ScheduleSJF(Process *processes, int processNum, bool preemptive){
 	
 }
 
@@ -353,8 +375,14 @@ void evaluation(int processNum, int baseScale){
 
 	// Process randomizing
 	Process *processes = (Process*)malloc(sizeof(Process) * processNum);
-	for(int i=0; i<processNum; i++) *(processes+i) = createRandomProcess(baseScale * 5, 0, 0, i * baseScale, 1, 5);
-	
+	for(int i=0; i<processNum; i++) *(processes+i) = createRandomProcess(baseScale * 5, 0, 0, 20 * i * baseScale, 1, 5);
+	Timeline FCFSscheduled = ScheduleFCFS(processes, processNum);
+	for(int i=0; i<FCFSscheduled.timelinesize; i++){
+		printf("Scheduled %03d - %03d: ", FCFSscheduled.interval[i][0], FCFSscheduled.interval[i][1]);
+		if(FCFSscheduled.usedProcesses[i] == NULL) printf("No process runned");
+		else reprSingle(FCFSscheduled.usedProcesses[i]);
+		printf("\n");
+	}
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -408,8 +436,7 @@ int main(void){
 	
 	//DequeFunctionalityTest1();
 	//SelectionSortFunctionalityTest();
-	
-	
+	evaluation(10, 2);
 	
 	return 0;
 }
