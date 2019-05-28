@@ -11,10 +11,11 @@
 				(o) - First Come First Serve
 				(o) - Shortest Job First
 				(o) - Given Priority
-				(x) - Round Robin
+				(o) - Round Robin
 		(o) - Gantt chart displaying
 		(o) - Evaluation: Calculate average waiting time, turnaround time
 			- Additional features
+				(o) - Dynamically changing priorities
 				(o) - Aging priorities (Preemptive, Non-preemptive)
 				(o) - Context switching cost (Generalized adaptivity)
 */
@@ -93,10 +94,12 @@ unsigned int superrandom(unsigned int min_, unsigned int max_){
 static int processCounter = 1;
 typedef enum {
 	criteria_FCFS, criteria_SJF, criteria_P,
-	criteria_AGING, criteria_RR
+	criteria_AGING, criteria_RR, criteria_PDy
 } ProcessComparisonCriteria;
-const bool ProcessComparisonTicking[5] = {false, false, false, true, false};
-const char ProcessComparisonNames[5][100] = {"CriteriaFCFS", "CriteriaSJF", "CriteriaPriority", "CriteriaAging", "CriteriaRoundRobin"};
+const bool ProcessComparisonTicking[5] = {false, false, false, true, false, false};
+const char ProcessComparisonNames[5][100] = 
+	{"CriteriaFCFS", "CriteriaSJF", "CriteriaPriority", "CriteriaAging", "CriteriaRoundRobin",
+	 "CriteriaPriorityDynamic"};
 const double agingFactor = pow(0.75, 1);
 
 // Struct
@@ -128,6 +131,7 @@ bool processComparisonGT(Process p1, Process p2, ProcessComparisonCriteria crite
 			else if(p1.givenPriority != p2.givenPriority) return p1.givenPriority < p2.givenPriority;
 			else break;
 		case criteria_P: // (givenPriority)
+		case criteria_PDy:
 			if(p1.givenPriority != p2.givenPriority) return p1.givenPriority < p2.givenPriority;
 			else break;
 		case criteria_AGING: // (aged priority = CPUburstleft * agingFactor ** age)
@@ -355,11 +359,19 @@ Timeline ScheduleGeneral(Process *processes, int processNum,
 			continue;
 		}
 		
+		if(criteria == criteria_PDy){ // Dynamically changing priorities
+			int randomChangingIndex = superrandom(start, end-1);
+			int currentPriority = (processes + randomChangingIndex)->givenPriority;
+			(processes+randomChangingIndex)->givenPriority = superrandom(currentPriority / 2, currentPriority * 2 + 1);
+			if(detailedDebug) printf("Process #%d's priority changed from %d to %d\n", (processes+randomChangingIndex)->PID,
+				currentPriority, (processes+randomChangingIndex)->givenPriority);
+		}
+		
 		// Pick optimal processes
 		processComparisonValues_timelinetimestamp = timeline.timestamp;
 		int picked = pick(processes, start, end, criteria);
 		if(criteria == criteria_RR && (processes+start)->RRcycleUsed == true){ // For round robin: If all processes are used, refresh the cycle.
-			printf("RoundRobin: All processes used cycle, refresh all cycles.\n");
+			if(detailedDebug) printf("RoundRobin: All processes used cycle, refresh all cycles.\n");
 			for(int i=start; i<end; i++) (processes+i)->RRcycleUsed = false;
 			picked = pick(processes, start, end, criteria);
 		}
@@ -492,7 +504,7 @@ void schedulingTests(int processNum, int burstScale, int arrivalScale, int conte
 	// Priority preemptive
 	Process *processesPP = deepCopyProcesses(processes, processNum);
 	Timeline PPscheduled = ScheduleGeneral(processesPP, processNum, true, criteria_P, contextSwitchingCost, detailedDebug);
-	GanttChart(&Pscheduled, "Priority-preemptive");
+	GanttChart(&PPscheduled, "Priority-preemptive");
 	
 	// Aging
 	Process *processesAG = deepCopyProcesses(processes, processNum);
@@ -504,6 +516,11 @@ void schedulingTests(int processNum, int burstScale, int arrivalScale, int conte
 	Timeline RRscheduled = ScheduleGeneral(processesRR, processNum, false, criteria_RR, contextSwitchingCost, detailedDebug);
 	GanttChart(&RRscheduled, "RoundRobin");
 	printf("Round Robin Quantum time = %d\n", globalRRQuantumTime);
+	
+	// Priority dynamic preemptive
+	Process *processesPDP = deepCopyProcesses(processes, processNum);
+	Timeline PDPscheduled = ScheduleGeneral(processesPDP, processNum, true, criteria_PDy, contextSwitchingCost, detailedDebug);
+	GanttChart(&PDPscheduled, "DynamicPriority-preemptive");
 }
 
 // --------------------------------------------------------------------------------------------------------------------
