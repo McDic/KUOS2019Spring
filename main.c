@@ -96,8 +96,8 @@ typedef enum {
 	criteria_FCFS, criteria_SJF, criteria_P,
 	criteria_AGING, criteria_RR, criteria_PDy
 } ProcessComparisonCriteria;
-const bool ProcessComparisonTicking[5] = {false, false, false, true, false, false};
-const char ProcessComparisonNames[5][100] = 
+const bool ProcessComparisonTicking[6] = {false, false, false, true, false, false};
+const char ProcessComparisonNames[6][100] = 
 	{"CriteriaFCFS", "CriteriaSJF", "CriteriaPriority", "CriteriaAging", "CriteriaRoundRobin",
 	 "CriteriaPriorityDynamic"};
 const double agingFactor = pow(0.75, 1);
