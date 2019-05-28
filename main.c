@@ -6,15 +6,17 @@
 		
 	Goals:
 		(o) - Creating process: ID, CPU burst, IO burst, Arrival time, Given priority 
-		(x) - Config: Ready queue, Waiting queue
-		(x) - Schedule (Implement both preemptive and non-preemptive)
-				(x) - First Come First Serve
-				(x) - Shortest Job First
-				(x) - Given Priority
+		(?) - Config: Ready queue, Waiting queue
+			- Schedule (Implement both preemptive and non-preemptive)
+				(o) - First Come First Serve
+				(o) - Shortest Job First
+				(o) - Given Priority
 				(x) - Round Robin
-		(x) - Gantt chart displaying
-		(x) - Evaluation: Calculate average waiting time, turnaround time
-		
+		(o) - Gantt chart displaying
+		(o) - Evaluation: Calculate average waiting time, turnaround time
+			- Additional features
+				(o) - Aging priorities (Preemptive, Non-preemptive)
+				(o) - Context switching cost (Generalized adaptivity)
 */
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -22,12 +24,29 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <time.h>
 
 // --------------------------------------------------------------------------------------------------------------------
-// Data structure - Boolean
+// Constants
 
+const int inf = 1<<30;
 typedef enum {false, true} bool;
+
+// --------------------------------------------------------------------------------------------------------------------
+// Base functions
+
+// Min and Max
+int min2(int a, int b){return a<b ? a:b;}
+int max2(int a, int b){return a>b ? a:b;}
+
+// Repeated printing.
+void printRepeat(const char *line, int count, bool everyNewline){
+	for(int i=0; i<count; i++){
+		printf("%s", line);
+		if(everyNewline) printf("\n");
+	}
+}
 
 // --------------------------------------------------------------------------------------------------------------------
 // Random
@@ -45,23 +64,23 @@ void setSeed(){
 }
 
 // Redeclare random [0 ~ RAND_MAX] with advanced features
-int random(){
+int myRandom(){
 	called++;
 	if(lastSetSeed == -1 || callThreshold <= called) setSeed();
-	return rand();
+	return rand() % (1<<15);
 }
 
 // Uniform number has $bits bits 
 int randomBits(bool positiveOnly){
-	int val = (random() << 15) + random();
-	val ^= (random() & (positiveOnly ? 1:3)) << 30;
+	int val = (myRandom() << 15) + myRandom();
+	val ^= (myRandom() & (positiveOnly ? 1:3)) << 30;
 	return val;
 }
 
 // Pseudo-uniform random between min_ and max_
 unsigned int superrandom(unsigned int min_, unsigned int max_){
 	if(min_ > max_){
-		printf("Error: Min value(%u) is bigger than max value(%u)\n", min_, max_);
+		printf("[Error] Min value(%u) is bigger than max value(%u)\n", min_, max_);
 		return -1;
 	}
 	return (unsigned int)randomBits(false) % (max_ - min_ + 1) + min_;
@@ -71,8 +90,14 @@ unsigned int superrandom(unsigned int min_, unsigned int max_){
 // Process structure
 
 // Nonce for identifying process uniquely
-static int processCounter = 0;
-typedef enum {criteria_FCFS, criteria_SJF, criteria_P} ProcessComparisonCriteria;
+static int processCounter = 1;
+typedef enum {
+	criteria_FCFS, criteria_SJF, criteria_P,
+	criteria_AGING, criteria_RR
+} ProcessComparisonCriteria;
+const bool ProcessComparisonTicking[5] = {false, false, false, true, false};
+const char ProcessComparisonNames[5][100] = {"CriteriaFCFS", "CriteriaSJF", "CriteriaPriority", "CriteriaAging", "CriteriaRoundRobin"};
+const double agingFactor = pow(0.75, 1);
 
 // Struct
 struct Process__{
@@ -84,25 +109,33 @@ struct Process__{
 	int givenPriority; // Small priority value means high priority
 	
 	// Statistics
+	bool RRcycleUsed; // For Round Robin
 	int CPUburstleft;
-	int turnaroundTime, waitingTime;
+	int finishedTime;
 	
 }; typedef struct Process__ Process;
 
 // Return True if p1 < p2, otherwise False.
+int processComparisonValues_timelinetimestamp = -1;
 bool processComparisonGT(Process p1, Process p2, ProcessComparisonCriteria criteria){
+	double calculatedValue1, calculatedValue2;
 	switch(criteria){ // PID comparison is final method, it's used after this switch
-		case criteria_FCFS: // (arrivalTime, givenPriority, PID)
+		case criteria_FCFS: // (arrivalTime)
 			if(p1.arrivalTime != p2.arrivalTime) return p1.arrivalTime < p2.arrivalTime;
-			else if(p1.givenPriority != p2.givenPriority) return p1.givenPriority < p2.givenPriority;
 			else break;
-		case criteria_SJF: // (CPUburstleft, givenPriority, PID)
+		case criteria_SJF: // (CPUburstleft, givenPriority)
 			if(p1.CPUburstleft != p2.CPUburstleft) return p1.CPUburstleft < p2.CPUburstleft;
 			else if(p1.givenPriority != p2.givenPriority) return p1.givenPriority < p2.givenPriority;
 			else break;
-		case criteria_P: // (givenPriority, PID)
+		case criteria_P: // (givenPriority)
 			if(p1.givenPriority != p2.givenPriority) return p1.givenPriority < p2.givenPriority;
 			else break;
+		case criteria_AGING: // (aged priority = CPUburstleft * agingFactor ** age)
+			calculatedValue1 = pow(agingFactor, processComparisonValues_timelinetimestamp - p1.arrivalTime) / (double)(1 + p1.CPUburstleft);
+			calculatedValue2 = pow(agingFactor, processComparisonValues_timelinetimestamp - p2.arrivalTime) / (double)(1 + p2.CPUburstleft);
+			if(calculatedValue1 != calculatedValue2) return calculatedValue1 < calculatedValue2;
+		case criteria_RR: // (consumed count)
+			if(p1.RRcycleUsed != p2.RRcycleUsed) return p1.RRcycleUsed < p2.RRcycleUsed;
 	} return p1.PID < p2.PID;
 }
 
@@ -114,7 +147,8 @@ Process createProcess(int CPUburst, int IOburst, int arrivalTime, int givenPrior
 	newCreatedOne.arrivalTime = arrivalTime;
 	newCreatedOne.givenPriority = givenPriority;
 	newCreatedOne.CPUburstleft = CPUburst;
-	newCreatedOne.turnaroundTime = 0, newCreatedOne.waitingTime = 0;
+	newCreatedOne.finishedTime = 0;
+	newCreatedOne.RRcycleUsed = false;
 	return newCreatedOne;
 }
 Process* createProcessAlloc(int CPUburst, int IOburst, int arrivalTime, int givenPriority){
@@ -140,102 +174,37 @@ Process* createRandomProcessAlloc(
 }
 
 // Deep copy
-Process* deepCopyProcess(Process* origin){
-	Process* newProcess = (Process*)malloc(sizeof(Process));
-	*newProcess = *origin;
-	return newProcess;
+Process* deepCopyProcesses(Process *origins, int processNum){
+	Process *newProcesses = (Process*)malloc(sizeof(Process) * processNum);
+	for(int i=0; i<processNum; i++) *(newProcesses+i) = *(origins+i);
+	return newProcesses;
 }
 
-// --------------------------------------------------------------------------------------------------------------------
-// Data structure - Deque
-
-// Single bi-directional node contains customized feature
-struct BiDirectionalNode__{
-	struct BiDirectionalNode__ *prev, *next;
-	void *feature;
-}; typedef struct BiDirectionalNode__ BiDirectionalNode;
-
-// Construct new node
-BiDirectionalNode* newBiDirectionalNode(void *feature){
-	BiDirectionalNode* newNode = (BiDirectionalNode*)malloc(sizeof(BiDirectionalNode));
-	newNode->prev = NULL, newNode->next = NULL;
-	newNode->feature = feature;
-	return newNode;
-}
-
-// Whole deque
-struct Deque__{
-	BiDirectionalNode *front, *back; // front = back->next->...->next, back = front->prev->...->prev
-	int maxSize, currentSize;
-	char* name;
-}; typedef struct Deque__ Deque;
-
-// Construct base deque
-Deque* newDeque(int maxsize, const char* name){
-	if(maxsize < 0){ // Invalid size leads to return NULL
-		printf("Negative max size(%d) given in function newDeque\n", maxsize);
-		return NULL;
-	}
-	Deque *newDq = (Deque*)malloc(sizeof(Deque));
-	newDq->front = NULL, newDq->back = NULL;
-	newDq->currentSize = 0; newDq->maxSize = 0;
-	newDq->name = strdup(name);
-	return newDq;
-}
-
-// Push new feature to front of the deque. Return true if push was successful, otherwise false.
-bool pushFront(Deque *dq, void* newFeature){
-	if(dq->maxSize == 0 || dq->currentSize < dq->maxSize){ // If given dq is unbounded or have enough extra space
-		BiDirectionalNode* newNode = newBiDirectionalNode(newFeature);
-		if(dq->currentSize == 0){ // Create single
-			dq->front = newNode;
-			dq->back = newNode;
-		}
-		else{ // (front) newNode dq->front ... dq->back (back)
-			newNode->prev = dq->front;
-			dq->front->next = newNode;
-			dq->front = newNode;
-		}
-		dq->currentSize++;
-		return true;
-	}
-	else{ // Deque reached size limit; Cancel allocation.
-		printf("Deque <%s> size limit reached in pushFront\n", dq->name);
-		return false;
+// Represent
+typedef enum {
+	ProcessRepresentMinimal, ProcessRepresentBurst,
+	ProcessRepresentStatistics 
+} ProcessRepresentingMode;
+void reprSingleProcess(Process *p, ProcessRepresentingMode mode){
+	if(p == NULL) printf("[Process NULL]");
+	else switch(mode){
+		case ProcessRepresentMinimal:
+			printf("[Process #%03d: CPU burst %03d, I/O burst %03d, arrival time %03d, given priority = %03d]",
+				p->PID, p->CPUburst, p->IOburst, p->arrivalTime, p->givenPriority); break;
+		case ProcessRepresentBurst:
+			printf("[Process #%03d: CPU burst %03d (%03d left), I/O burst %03d, arrival time %03d, given priority = %03d]",
+				p->PID, p->CPUburst, p->CPUburstleft, p->IOburst, p->arrivalTime, p->givenPriority); break;
+		case ProcessRepresentStatistics:
+			printf("[Process #%03d: CPU %03d, I/O %03d, Arrival %03d, Prio = %03d, Turnaround = %03d, Waiting = %03d]",
+				p->PID, p->CPUburst, p->IOburst, p->arrivalTime, p->givenPriority, p->finishedTime - p->arrivalTime, 
+				p->finishedTime - p->arrivalTime - p->CPUburst); break;
 	}
 }
-
-// Pop back
-void* popBack(Deque *dq){
-	if(dq->currentSize == 0){
-		printf("Tried pop_back to empty Deque <%s>\n", dq->name);
-		return NULL;
+void reprMultiProcesses(Process *p, int limit, ProcessRepresentingMode mode){
+	printf("Representing processes:\n");
+	for(int i=0; i<limit; i++){
+		printf("  "); reprSingleProcess(p+i, mode); printf("\n");
 	}
-	else{
-		BiDirectionalNode* poppedNode = dq->back;
-		void* poppedFeature = poppedNode->feature;
-		dq->back = poppedNode->next;
-		if(dq->back != NULL) dq->back->prev = NULL;
-		dq->currentSize--;
-		free(poppedNode);
-		return poppedFeature;
-	}
-}
-
-// Clear all elements
-void clearDeque(Deque *dq, bool freeFeature){
-	while(dq->currentSize > 0){
-		void* feature = popBack(dq);
-		if(freeFeature) free(feature);
-	}
-	dq->front = NULL;
-	dq->back = NULL;
-}
-
-// Delete deque itself
-void deleteDeque(Deque *dq, bool freeFeature){
-	clearDeque(dq, freeFeature);
-	free(dq);
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -243,7 +212,7 @@ void deleteDeque(Deque *dq, bool freeFeature){
 // Given process array: *processes.
 
 // Pick processes in [start, end) and swap (start, optimal).
-void pick(Process *processes, int start, int end, ProcessComparisonCriteria criteria){
+int pick(Process *processes, int start, int end, ProcessComparisonCriteria criteria){
 	int targetIndex = start;
 	for(int i=start+1; i<end; i++){
 		// if Pi < Pt => if Pi has higher priority than Pt
@@ -254,23 +223,12 @@ void pick(Process *processes, int start, int end, ProcessComparisonCriteria crit
 	Process temp = *(processes+start);
 	*(processes+start) = *(processes+targetIndex);
 	*(processes+targetIndex) = temp;
+	return targetIndex;
 }
 
 // Selection sort with given criteria in range [start, end).
 void selectionSort(Process *processes, int start, int end, ProcessComparisonCriteria criteria){
 	for(int i=start; i<end; i++) pick(processes, i, end, criteria);
-}
-
-// Represent
-void reprSingle(Process *p){
-	printf("[Process #%d: CPU burst %d (%d left), IO burst %d, arrival time %d, given priority = %d]",
-		p->PID, p->CPUburst, p->CPUburstleft, p->IOburst, p->arrivalTime, p->givenPriority);
-}
-void reprMulti(Process *p, int limit){
-	printf("Representing processes:\n");
-	for(int i=0; i<limit; i++){
-		printf("  "); reprSingle(p+i); printf("\n");
-	}
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -281,134 +239,195 @@ void reprMulti(Process *p, int limit){
 struct Timeline__{
 	
 	// Nonarray attributes
-	int timelinesize, processNum, timestamp;
+	int timelinesize, timestamp;
+	int processNum, contextswitchingcost;
 	Process *processes;
 	
-	// Timerelated attributes: [(usedProcesses[i], interval[i][0], interval[i][1]), ...]
-	// For all i, <PID = usedProcesses[i]> process did job in time interval [interval[i][0], interval[i][1])
+	// Timerelated attributes: [(usedProcessesPID[i], interval[i][0], interval[i][1]), ...]
+	// For all i, <PID = usedProcessesPID[i]> process did job in time interval [interval[i][0], interval[i][1])
 	int interval[maxTimelineLength][2];
-	Process *usedProcesses[maxTimelineLength]; // This can be null since CPU can kill time without doing any jobs
+	int usedProcessesPID[maxTimelineLength]; // This can be null since CPU can kill time without doing any jobs
 	
 }; typedef struct Timeline__ Timeline;
 
+static int globalRRQuantumTime = 10;
+
 // Create new one
-Timeline newTimeline(Process *processes, int processNum){
+Timeline newTimeline(Process *processes, int processNum, int contextswitchingcost){
 	Timeline newCreatedOne;
 	newCreatedOne.timelinesize = 0;
 	newCreatedOne.timestamp = 0;
 	newCreatedOne.processes = processes;
 	newCreatedOne.processNum = processNum;
+	newCreatedOne.contextswitchingcost = contextswitchingcost;
 	return newCreatedOne;
 }
 
 // Make job. If given interval is bigger than given process's length then make interval lower
 // Parameter 'process' can be NULL if we intended to CPU kills time
 void doJobFor(Timeline *timeline, Process *process, int duration){
+	//printf("Do job process #%d for %d seconds\n", process == NULL ? -1 : process->PID, duration);
 	
 	// Critical validation
 	if(duration <= 0){ // Duration validation
-		printf("Invalid duration interval(%d) got in function doJobFor\n", duration);
-		return;
+		printf("[Error] Invalid duration interval(%d) got in function doJobFor\n", duration);
+		exit(0);
 	}
 	else if(process != NULL && process->CPUburstleft == 0){ // Tried to give job for burned process
-		printf("Given "); reprSingle(process); printf(" is already burned out in function doJobFor\n");
-		return;
+		printf("[Error] Given "); reprSingleProcess(process, ProcessRepresentMinimal); 
+		printf(" is already burned out in function doJobFor\n");
+		exit(0);
 	}
 	
 	// Weak validation
 	if(process != NULL && process->CPUburstleft < duration){ // Duration modification
+		printf("[Warning] Given duration(%d) is larger than process's CPU burst left(%d), automatically fixed.\n",
+			duration, process->CPUburstleft);
 		duration = process->CPUburstleft;
 	}
 	
-	// Process modification
-	if(process != NULL) process->CPUburstleft -= duration;
+	// Debug
+	/*printf("Timestamp %03d, timeline size %d, doing job = ", timeline->timestamp, timeline->timelinesize);
+	if(process == NULL) printf("<nothing>, "); else printf("<PID #%d>, ", process->PID);
+	printf("last used process = ");
+	if(timeline->timelinesize == 0 || timeline->usedProcessesPID[timeline->timelinesize - 1] == -1) printf("<nothing>, ");
+	else printf("<PID #%d>, ", timeline->usedProcessesPID[timeline->timelinesize - 1]); //printf("\n");*/
 	
 	// Timeline modification
-	timeline->timestamp += duration;
-	if(timeline->timelinesize == 0 || timeline->usedProcesses[timeline->timelinesize - 1] != process){ // Append new one
-		timeline->usedProcesses[timeline->timelinesize] = process;
+	if(timeline->timelinesize == 0 || 
+		(timeline->usedProcessesPID[timeline->timelinesize - 1] != -1 && process == NULL) || 
+		(process != NULL && timeline->usedProcessesPID[timeline->timelinesize - 1] != process->PID)){ // Append new one
+		//printf("Yeah it's different.\n");
+		if(process != NULL && timeline->timelinesize > 0 && 
+			timeline->usedProcessesPID[timeline->timelinesize - 1] != -1 &&
+			timeline->contextswitchingcost > 0) {
+			// Previous process and current processes are different and not null -> Add context switching cost
+			//printf("Adding context switching cost:\n");
+			doJobFor(timeline, NULL, timeline->contextswitchingcost);
+		}
+		timeline->timestamp += duration;
+		timeline->usedProcessesPID[timeline->timelinesize] = (process == NULL ? -1 : process->PID);
 		timeline->interval[timeline->timelinesize][0] = timeline->timestamp - duration;
 		timeline->interval[timeline->timelinesize][1] = timeline->timestamp;
 		timeline->timelinesize++;
 	}
 	else{ // Modify latest one
+		//printf("No, it's modifying last one\n");
+		timeline->timestamp += duration;
 		timeline->interval[timeline->timelinesize - 1][1] = timeline->timestamp;
+	}
+	
+	// Process modification
+	if(process != NULL){
+		process->CPUburstleft -= duration;
+		process->RRcycleUsed = true;
+		if(process->CPUburstleft == 0) process->finishedTime = timeline->timestamp;
 	}
 }
 
 // --------------------------------------------------------------------------------------------------------------------
 // Naive scheduling
 
-// First Come First Serve
-Timeline ScheduleFCFS(Process *processes, int processNum){
-	Timeline timeline = newTimeline(processes, processNum);
-	selectionSort(processes, 0, processNum, criteria_FCFS);
-	for(int i=0; i<processNum; i++){
-		if(timeline.timestamp < (processes+i)->arrivalTime)
-			doJobFor(&timeline, NULL, (processes+i)->arrivalTime - timeline.timestamp);
-		doJobFor(&timeline, processes+i, (processes+i)->CPUburstleft);
-	}
-	return timeline;
-}
+// General scheduling method
+Timeline ScheduleGeneral(Process *processes, int processNum, 
+		bool preemptive, ProcessComparisonCriteria criteria, int contextswitchingcost, bool detailedDebug){
 
-// Shortest Job First
-Timeline ScheduleSJF(Process *processes, int processNum, bool preemptive){
-	
+	Timeline timeline = newTimeline(processes, processNum, contextswitchingcost);
+	selectionSort(processes, 0, processNum, criteria_FCFS);
+	int start = 0, end = 0;
+	while(start < processNum){
+		
+		// Move front pointer until all processes come
+		while(end < processNum && processes[end].arrivalTime <= timeline.timestamp) end++;
+		
+		// Now we should check for [start, end)
+		int next_come = (end < processNum ? processes[end].arrivalTime : inf);
+		if(start == end){ // Nothing to do; Just wait until next process comes.
+			if(next_come == inf){
+				printf("[Error] Something wrong happened in ScheduleGeneral (%s), all processes done but loop is not ended.\n",
+					ProcessComparisonNames[criteria]);
+				exit(0);
+			}
+			doJobFor(&timeline, NULL, next_come - timeline.timestamp);
+			continue;
+		}
+		
+		// Pick optimal processes
+		processComparisonValues_timelinetimestamp = timeline.timestamp;
+		int picked = pick(processes, start, end, criteria);
+		if(criteria == criteria_RR && (processes+start)->RRcycleUsed){ // For round robin: If all processes are used, refresh the cycle.
+			for(int i=start; i<end; i++) (processes+start)->RRcycleUsed = false;
+			picked = pick(processes, start, end, criteria);
+		}
+		
+		if(detailedDebug){
+			printf("Timestamp %03d: Picked #%d from among\n", timeline.timestamp, (processes+start)->PID);
+			//for(int i=start; i<end; i++){
+			//	printf("  "); reprSingleProcess(processes + i, ProcessRepresentMinimal); printf("\n");
+			//}
+		}
+		
+		// Do job
+		if(criteria == criteria_RR) // If round-robin, then use quantum time
+			doJobFor(&timeline, processes+start, min2((processes+start)->CPUburstleft, globalRRQuantumTime));
+		else if(preemptive) // Do until next process comes
+			//printf("Preemptive: Doing %d seconds\n", max2(1, min2((processes+start)->CPUburstleft, next_come - timeline.timestamp))),
+			doJobFor(&timeline, processes+start, 
+				ProcessComparisonTicking[criteria] ? 1 : max2(1, min2((processes+start)->CPUburstleft, next_come - timeline.timestamp)));
+		else // Do all and go next
+			//printf("Non-preemptive: Doing %d seconds\n", (processes+start)->CPUburstleft),
+			doJobFor(&timeline, processes+start, (processes+start)->CPUburstleft);
+			
+		// If current process bursted then move back pointer
+		if((processes+start)->CPUburstleft == 0) start++;
+	} return timeline;
 }
 
 // --------------------------------------------------------------------------------------------------------------------
 // Gantt chart displaying
 
-void GanttChart(Timeline timeline){
-	// results = [PID[0,1), PID[1,2), PID[2,3), ..., -1 (end)]
-}
-
-// Evaluation
-void evaluation(int processNum, int baseScale){
+// Display Gantt chart
+void GanttChart(Timeline *timeline, const char *timelineTitle){
 	
-	// Parameter evaluation
-	if(baseScale <= 0 || processNum <= 0){
-		printf("Nonpositive process num(%d) or base scale(%d) given - evaluation will be terminated.\n",
-			processNum, baseScale);
+	// Validation
+	if(timeline->timelinesize == 0){
+		printf("[Warning] Tried to print empty timeline\n");
 		return;
 	}
-
-	// Process randomizing
-	Process *processes = (Process*)malloc(sizeof(Process) * processNum);
-	for(int i=0; i<processNum; i++) *(processes+i) = createRandomProcess(baseScale * 5, 0, 0, 20 * i * baseScale, 1, 5);
-	Timeline FCFSscheduled = ScheduleFCFS(processes, processNum);
-	for(int i=0; i<FCFSscheduled.timelinesize; i++){
-		printf("Scheduled %03d - %03d: ", FCFSscheduled.interval[i][0], FCFSscheduled.interval[i][1]);
-		if(FCFSscheduled.usedProcesses[i] == NULL) printf("No process runned");
-		else reprSingle(FCFSscheduled.usedProcesses[i]);
+	
+	// Pre-main
+	printf("\n");
+	printRepeat("-", 80, false);
+	printf("\nGantt chart for timeline %s.\n\n", timelineTitle);
+	
+	// Main 1: Processes info
+	printf("Processes: \n");
+	for(int i=0; i<timeline->processNum; i++){
+		printf("  "); 
+		reprSingleProcess(timeline->processes + i, ProcessRepresentStatistics); 
 		printf("\n");
-	}
+	} printf("\n");
+	
+	// Main 2: Vertical Gantt chart
+	printf("Timeline: \n");
+	for(int i=0; i<timeline->timelinesize; i++){
+		printf("%4d +-----------+\n     | PID = ", timeline->interval[i][0]);
+		if(timeline->usedProcessesPID[i] == -1) printf("---");
+		else printf("%03d", timeline->usedProcessesPID[i]);
+		printf(" |\n");
+	} printf("%4d +-----------+\n\n", timeline->interval[timeline->timelinesize-1][1]);
+	
+	// Main 3: Calculate average turnaround time and waiting time.
+	int total_turnaround = 0, total_waiting = 0;
+	for(int i=0; i<timeline->processNum; i++){
+		total_turnaround += timeline->processes[i].finishedTime - timeline->processes[i].arrivalTime;
+		total_waiting += timeline->processes[i].finishedTime - timeline->processes[i].arrivalTime - timeline->processes[i].CPUburst;
+	} printf("Average turnaround %.2f, average waiting %.2f\n", 
+		(double)total_turnaround / timeline->processNum, (double)total_waiting / timeline->processNum);
 }
 
 // --------------------------------------------------------------------------------------------------------------------
 // Functionality testing
-
-// Testing deque functionalities
-void DequeFunctionalityTest1(){
-	
-	Deque* dq = newDeque(100, "test deque");
-	for(int i=0; i<100; i++){
-		int *feature = (int*)malloc(sizeof(int));
-		*feature = superrandom(0, 1000);
-		bool status = pushFront(dq, (void*)feature);
-		if(status){
-			printf("Pushed %d into deque <%s>\n", *feature, dq->name);
-			int randomsta = superrandom(0, 2);
-			if(randomsta){
-				printf("Popping: ");
-				void *feature = popBack(dq);
-				printf("Popped %d from deque <%s>\n", *(int*)feature, dq->name);
-			}
-		}
-		else break;
-	}
-	deleteDeque(dq, true);
-}
 
 // Testing selection sort on processes
 void SelectionSortFunctionalityTest(){
@@ -420,13 +439,68 @@ void SelectionSortFunctionalityTest(){
 	
 	// Sort in 3 different criterias
 	const char criteria_str[3][100] = {"FCFS", "SJF", "Priority"};
-	printf("Before sorted - "); reprMulti(processes, processNum);
+	printf("Before sorted - "); reprMultiProcesses(processes, processNum, ProcessRepresentMinimal);
 	for(int criteria = 0; criteria < 3; criteria++){
 		selectionSort(processes, 0, processNum, criteria);
 		printf("\n\nAfter sorted by %s - ", criteria_str[criteria]);
-		reprMulti(processes, processNum);
+		reprMultiProcesses(processes, processNum, ProcessRepresentMinimal);
 	}
 	free(processes);
+}
+
+// Evaluation
+void schedulingTests(int processNum, int burstScale, int arrivalScale, bool detailedDebug){
+	
+	// Parameter evaluation
+	if(burstScale <= 0 || processNum <= 0 || arrivalScale <= 0){
+		printf("[Error] Nonpositive process num(%d) or scalars(%d, %d) given - evaluation will be terminated.\n",
+			processNum, burstScale, arrivalScale);
+		exit(0);
+	}
+
+	// Process randomizing
+	Process *processes = (Process*)malloc(sizeof(Process) * processNum);
+	for(int i=0; i<processNum; i++) *(processes+i) = createRandomProcess(burstScale, 0, 0, i * arrivalScale, 1, 5);
+	printf("Initial processes:\n");
+	reprMultiProcesses(processes, processNum, ProcessRepresentMinimal);
+	printRepeat("-", 60, false); printf("\n");
+	
+	// FCFS
+	Process *processesFCFS = deepCopyProcesses(processes, processNum);
+	Timeline FCFSscheduled = ScheduleGeneral(processesFCFS, processNum, false, criteria_FCFS, 1, detailedDebug);
+	GanttChart(&FCFSscheduled, "FCFS");
+	
+	// SJF non preemptive
+	Process *processesSJF = deepCopyProcesses(processes, processNum);
+	Timeline SJFscheduled = ScheduleGeneral(processesSJF, processNum, false, criteria_SJF, 0, detailedDebug);
+	GanttChart(&SJFscheduled, "SJF");
+	
+	// SJF preemptive
+	Process *processesSJFP = deepCopyProcesses(processes, processNum);
+	Timeline SJFPscheduled = ScheduleGeneral(processesSJFP, processNum, true, criteria_SJF, 0, detailedDebug);
+	GanttChart(&SJFPscheduled, "SJF-preemptive");
+	
+	// Priority non preemptive
+	Process *processesP = deepCopyProcesses(processes, processNum);
+	Timeline Pscheduled = ScheduleGeneral(processesP, processNum, false, criteria_P, 0, detailedDebug);
+	GanttChart(&Pscheduled, "Priority");
+	
+	// Priority preemptive
+	Process *processesPP = deepCopyProcesses(processes, processNum);
+	Timeline PPscheduled = ScheduleGeneral(processesPP, processNum, true, criteria_P, 0, detailedDebug);
+	GanttChart(&Pscheduled, "Priority-preemptive");
+	
+	// Aging
+	Process *processesAG = deepCopyProcesses(processes, processNum);
+	Timeline AGscheduled = ScheduleGeneral(processesAG, processNum, true, criteria_AGING, 0, detailedDebug);
+	GanttChart(&AGscheduled, "CustomizedAging-preemptive");
+	
+	// RR
+	globalRRQuantumTime = max2(burstScale / 3, 1);
+	Process *processesRR = deepCopyProcesses(processes, processNum);
+	Timeline RRscheduled = ScheduleGeneral(processesRR, processNum, false, criteria_RR, 0, detailedDebug);
+	GanttChart(&RRscheduled, "RoundRobin");
+	printf("Round Robin Quantum time = %d\n", globalRRQuantumTime);
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -436,7 +510,7 @@ int main(void){
 	
 	//DequeFunctionalityTest1();
 	//SelectionSortFunctionalityTest();
-	evaluation(10, 2);
+	schedulingTests(10, 10, 8, false);
 	
 	return 0;
 }
