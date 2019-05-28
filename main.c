@@ -510,7 +510,15 @@ int main(void){
 	
 	//DequeFunctionalityTest1();
 	//SelectionSortFunctionalityTest();
-	schedulingTests(10, 10, 8, false);
+	
+	printf("Welcome to the Minsung's CPU scheduling world!\n");
+	printf("Please input the number of processes: ");
+	int processNum; scanf("%d", &processNum);
+	printf("Please input the burst scale(positive number): ");
+	int burstScale; scanf("%d", &burstScale);
+	printf("Please input the arrival scale(positive number): ");
+	int arrivalScale; scanf("%d", &arrivalScale);
+	schedulingTests(processNum, burstScale, arrivalScale, false);
 	
 	return 0;
 }
