@@ -134,8 +134,11 @@ bool processComparisonGT(Process p1, Process p2, ProcessComparisonCriteria crite
 			calculatedValue1 = pow(agingFactor, processComparisonValues_timelinetimestamp - p1.arrivalTime) / (double)(1 + p1.CPUburstleft);
 			calculatedValue2 = pow(agingFactor, processComparisonValues_timelinetimestamp - p2.arrivalTime) / (double)(1 + p2.CPUburstleft);
 			if(calculatedValue1 != calculatedValue2) return calculatedValue1 < calculatedValue2;
+			else break;
 		case criteria_RR: // (consumed count)
-			if(p1.RRcycleUsed != p2.RRcycleUsed) return p1.RRcycleUsed < p2.RRcycleUsed;
+			if(p1.RRcycleUsed == true && p2.RRcycleUsed == false) return false;
+			else if(p1.RRcycleUsed == false && p2.RRcycleUsed == true) return true;
+			else break;
 	} return p1.PID < p2.PID;
 }
 
@@ -271,12 +274,12 @@ void doJobFor(Timeline *timeline, Process *process, int duration){
 	// Critical validation
 	if(duration <= 0){ // Duration validation
 		printf("[Error] Invalid duration interval(%d) got in function doJobFor\n", duration);
-		exit(0);
+		exit(-1);
 	}
 	else if(process != NULL && process->CPUburstleft == 0){ // Tried to give job for burned process
 		printf("[Error] Given "); reprSingleProcess(process, ProcessRepresentMinimal); 
 		printf(" is already burned out in function doJobFor\n");
-		exit(0);
+		exit(-1);
 	}
 	
 	// Weak validation
@@ -346,7 +349,7 @@ Timeline ScheduleGeneral(Process *processes, int processNum,
 			if(next_come == inf){
 				printf("[Error] Something wrong happened in ScheduleGeneral (%s), all processes done but loop is not ended.\n",
 					ProcessComparisonNames[criteria]);
-				exit(0);
+				exit(-1);
 			}
 			doJobFor(&timeline, NULL, next_come - timeline.timestamp);
 			continue;
@@ -355,8 +358,9 @@ Timeline ScheduleGeneral(Process *processes, int processNum,
 		// Pick optimal processes
 		processComparisonValues_timelinetimestamp = timeline.timestamp;
 		int picked = pick(processes, start, end, criteria);
-		if(criteria == criteria_RR && (processes+start)->RRcycleUsed){ // For round robin: If all processes are used, refresh the cycle.
-			for(int i=start; i<end; i++) (processes+start)->RRcycleUsed = false;
+		if(criteria == criteria_RR && (processes+start)->RRcycleUsed == true){ // For round robin: If all processes are used, refresh the cycle.
+			printf("RoundRobin: All processes used cycle, refresh all cycles.\n");
+			for(int i=start; i<end; i++) (processes+i)->RRcycleUsed = false;
 			picked = pick(processes, start, end, criteria);
 		}
 		
@@ -449,13 +453,13 @@ void SelectionSortFunctionalityTest(){
 }
 
 // Evaluation
-void schedulingTests(int processNum, int burstScale, int arrivalScale, bool detailedDebug){
+void schedulingTests(int processNum, int burstScale, int arrivalScale, int contextSwitchingCost, bool detailedDebug){
 	
 	// Parameter evaluation
-	if(burstScale <= 0 || processNum <= 0 || arrivalScale <= 0){
+	if(burstScale <= 0 || processNum <= 0 || arrivalScale < 0){
 		printf("[Error] Nonpositive process num(%d) or scalars(%d, %d) given - evaluation will be terminated.\n",
 			processNum, burstScale, arrivalScale);
-		exit(0);
+		exit(-1);
 	}
 
 	// Process randomizing
@@ -467,38 +471,37 @@ void schedulingTests(int processNum, int burstScale, int arrivalScale, bool deta
 	
 	// FCFS
 	Process *processesFCFS = deepCopyProcesses(processes, processNum);
-	Timeline FCFSscheduled = ScheduleGeneral(processesFCFS, processNum, false, criteria_FCFS, 1, detailedDebug);
+	Timeline FCFSscheduled = ScheduleGeneral(processesFCFS, processNum, false, criteria_FCFS, contextSwitchingCost, detailedDebug);
 	GanttChart(&FCFSscheduled, "FCFS");
 	
 	// SJF non preemptive
 	Process *processesSJF = deepCopyProcesses(processes, processNum);
-	Timeline SJFscheduled = ScheduleGeneral(processesSJF, processNum, false, criteria_SJF, 0, detailedDebug);
+	Timeline SJFscheduled = ScheduleGeneral(processesSJF, processNum, false, criteria_SJF, contextSwitchingCost, detailedDebug);
 	GanttChart(&SJFscheduled, "SJF");
 	
 	// SJF preemptive
 	Process *processesSJFP = deepCopyProcesses(processes, processNum);
-	Timeline SJFPscheduled = ScheduleGeneral(processesSJFP, processNum, true, criteria_SJF, 0, detailedDebug);
+	Timeline SJFPscheduled = ScheduleGeneral(processesSJFP, processNum, true, criteria_SJF, contextSwitchingCost, detailedDebug);
 	GanttChart(&SJFPscheduled, "SJF-preemptive");
 	
 	// Priority non preemptive
 	Process *processesP = deepCopyProcesses(processes, processNum);
-	Timeline Pscheduled = ScheduleGeneral(processesP, processNum, false, criteria_P, 0, detailedDebug);
+	Timeline Pscheduled = ScheduleGeneral(processesP, processNum, false, criteria_P, contextSwitchingCost, detailedDebug);
 	GanttChart(&Pscheduled, "Priority");
 	
 	// Priority preemptive
 	Process *processesPP = deepCopyProcesses(processes, processNum);
-	Timeline PPscheduled = ScheduleGeneral(processesPP, processNum, true, criteria_P, 0, detailedDebug);
+	Timeline PPscheduled = ScheduleGeneral(processesPP, processNum, true, criteria_P, contextSwitchingCost, detailedDebug);
 	GanttChart(&Pscheduled, "Priority-preemptive");
 	
 	// Aging
 	Process *processesAG = deepCopyProcesses(processes, processNum);
-	Timeline AGscheduled = ScheduleGeneral(processesAG, processNum, true, criteria_AGING, 0, detailedDebug);
+	Timeline AGscheduled = ScheduleGeneral(processesAG, processNum, true, criteria_AGING, contextSwitchingCost, detailedDebug);
 	GanttChart(&AGscheduled, "CustomizedAging-preemptive");
 	
 	// RR
-	globalRRQuantumTime = max2(burstScale / 3, 1);
 	Process *processesRR = deepCopyProcesses(processes, processNum);
-	Timeline RRscheduled = ScheduleGeneral(processesRR, processNum, false, criteria_RR, 0, detailedDebug);
+	Timeline RRscheduled = ScheduleGeneral(processesRR, processNum, false, criteria_RR, contextSwitchingCost, detailedDebug);
 	GanttChart(&RRscheduled, "RoundRobin");
 	printf("Round Robin Quantum time = %d\n", globalRRQuantumTime);
 }
@@ -512,13 +515,17 @@ int main(void){
 	//SelectionSortFunctionalityTest();
 	
 	printf("Welcome to the Minsung's CPU scheduling world!\n");
-	printf("Please input the number of processes: ");
-	int processNum; scanf("%d", &processNum);
+	printf("Please input the number of processes(positive number): ");
+	int processNum; scanf("%d", &processNum); if(processNum <= 0) exit(-1);
 	printf("Please input the burst scale(positive number): ");
-	int burstScale; scanf("%d", &burstScale);
-	printf("Please input the arrival scale(positive number): ");
-	int arrivalScale; scanf("%d", &arrivalScale);
-	schedulingTests(processNum, burstScale, arrivalScale, false);
+	int burstScale; scanf("%d", &burstScale); if(burstScale <= 0) exit(-1);
+	printf("Please input the arrival scale(non-negative number): ");
+	int arrivalScale; scanf("%d", &arrivalScale); if(arrivalScale < 0) exit(-1);
+	printf("Please input the context switching cost(non-negative number): ");
+	int contextswitchingcost; scanf("%d", &contextswitchingcost); if(contextswitchingcost < 0) exit(-1);
+	printf("Please input the RR quantum time(positive number): ");
+	scanf("%d", &globalRRQuantumTime); if(globalRRQuantumTime <= 0) exit(-1);
+	schedulingTests(processNum, burstScale, arrivalScale, contextswitchingcost, false);
 	
 	return 0;
 }
