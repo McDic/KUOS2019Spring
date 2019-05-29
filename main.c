@@ -7,6 +7,7 @@
 	Goals:
 		(o) - Creating process: ID, CPU burst, IO burst, Arrival time, Given priority 
 		(?) - Config: Ready queue, Waiting queue
+		(o) - Random I/O performing
 			- Schedule (Implement both preemptive and non-preemptive)
 				(o) - First Come First Serve
 				(o) - Shortest Job First
@@ -328,7 +329,10 @@ void doJobFor(Timeline *timeline, Process *process, int duration){
 	if(process != NULL){
 		process->CPUburstleft -= duration;
 		process->RRcycleUsed = true;
-		if(process->CPUburstleft == 0) process->finishedTime = timeline->timestamp;
+		if(process->CPUburstleft == 0){
+			process->finishedTime = timeline->timestamp;
+			if(process->IOburst != 0) printf("[Random I/O] Random I/O performing from process #%d\n", process->PID);
+		}
 	}
 }
 
@@ -336,9 +340,15 @@ void doJobFor(Timeline *timeline, Process *process, int duration){
 // Naive scheduling
 
 // General scheduling method
-Timeline ScheduleGeneral(Process *processes, int processNum, 
-		bool preemptive, ProcessComparisonCriteria criteria, int contextswitchingcost, bool detailedDebug){
+Timeline ScheduleGeneral(Process *processes, int processNum, bool preemptive, 
+		ProcessComparisonCriteria criteria, int contextswitchingcost, bool detailedDebug,
+		const char *timelineTitle){
 
+	// Prefix decoration
+	printf("\n"); printRepeat("-", 80, false);
+	printf("\nScheduling for timeline %s.\n\n", timelineTitle);
+	
+	// Scheduling
 	Timeline timeline = newTimeline(processes, processNum, contextswitchingcost);
 	selectionSort(processes, 0, processNum, criteria_FCFS);
 	int start = 0, end = 0;
@@ -411,9 +421,8 @@ void GanttChart(Timeline *timeline, const char *timelineTitle){
 		return;
 	}
 	
-	// Pre-main
-	printf("\n");
-	printRepeat("-", 80, false);
+	// Prefix decoration
+	printf("\n"); printRepeat("-", 80, false);
 	printf("\nGantt chart for timeline %s.\n\n", timelineTitle);
 	
 	// Main 1: Processes info
@@ -436,8 +445,9 @@ void GanttChart(Timeline *timeline, const char *timelineTitle){
 	// Main 3: Calculate average turnaround time and waiting time.
 	int total_turnaround = 0, total_waiting = 0;
 	for(int i=0; i<timeline->processNum; i++){
-		total_turnaround += timeline->processes[i].finishedTime - timeline->processes[i].arrivalTime;
-		total_waiting += timeline->processes[i].finishedTime - timeline->processes[i].arrivalTime - timeline->processes[i].CPUburst;
+		int finished = timeline->processes[i].finishedTime, arrived = timeline->processes[i].arrivalTime;
+		total_turnaround += finished - arrived;
+		total_waiting += finished - arrived - timeline->processes[i].CPUburst;
 	} printf("Average turnaround %.2f, average waiting %.2f\n", 
 		(double)total_turnaround / timeline->processNum, (double)total_waiting / timeline->processNum);
 }
@@ -476,50 +486,50 @@ void schedulingTests(int processNum, int burstScale, int arrivalScale, int conte
 
 	// Process randomizing
 	Process *processes = (Process*)malloc(sizeof(Process) * processNum);
-	for(int i=0; i<processNum; i++) *(processes+i) = createRandomProcess(burstScale, 0, 0, i * arrivalScale, 1, 5);
+	for(int i=0; i<processNum; i++) *(processes+i) = createRandomProcess(burstScale, 2, 0, i * arrivalScale, 1, 5);
 	printf("Initial processes:\n");
 	reprMultiProcesses(processes, processNum, ProcessRepresentMinimal);
 	printRepeat("-", 60, false); printf("\n");
 	
 	// FCFS
 	Process *processesFCFS = deepCopyProcesses(processes, processNum);
-	Timeline FCFSscheduled = ScheduleGeneral(processesFCFS, processNum, false, criteria_FCFS, contextSwitchingCost, detailedDebug);
+	Timeline FCFSscheduled = ScheduleGeneral(processesFCFS, processNum, false, criteria_FCFS, contextSwitchingCost, detailedDebug, "FCFS");
 	GanttChart(&FCFSscheduled, "FCFS");
 	
 	// SJF non preemptive
 	Process *processesSJF = deepCopyProcesses(processes, processNum);
-	Timeline SJFscheduled = ScheduleGeneral(processesSJF, processNum, false, criteria_SJF, contextSwitchingCost, detailedDebug);
+	Timeline SJFscheduled = ScheduleGeneral(processesSJF, processNum, false, criteria_SJF, contextSwitchingCost, detailedDebug, "SJF");
 	GanttChart(&SJFscheduled, "SJF");
 	
 	// SJF preemptive
 	Process *processesSJFP = deepCopyProcesses(processes, processNum);
-	Timeline SJFPscheduled = ScheduleGeneral(processesSJFP, processNum, true, criteria_SJF, contextSwitchingCost, detailedDebug);
+	Timeline SJFPscheduled = ScheduleGeneral(processesSJFP, processNum, true, criteria_SJF, contextSwitchingCost, detailedDebug, "SJF-preemptive");
 	GanttChart(&SJFPscheduled, "SJF-preemptive");
 	
 	// Priority non preemptive
 	Process *processesP = deepCopyProcesses(processes, processNum);
-	Timeline Pscheduled = ScheduleGeneral(processesP, processNum, false, criteria_P, contextSwitchingCost, detailedDebug);
+	Timeline Pscheduled = ScheduleGeneral(processesP, processNum, false, criteria_P, contextSwitchingCost, detailedDebug, "Priority");
 	GanttChart(&Pscheduled, "Priority");
 	
 	// Priority preemptive
 	Process *processesPP = deepCopyProcesses(processes, processNum);
-	Timeline PPscheduled = ScheduleGeneral(processesPP, processNum, true, criteria_P, contextSwitchingCost, detailedDebug);
+	Timeline PPscheduled = ScheduleGeneral(processesPP, processNum, true, criteria_P, contextSwitchingCost, detailedDebug, "Priority-preemptive");
 	GanttChart(&PPscheduled, "Priority-preemptive");
 	
 	// Aging
 	Process *processesAG = deepCopyProcesses(processes, processNum);
-	Timeline AGscheduled = ScheduleGeneral(processesAG, processNum, true, criteria_AGING, contextSwitchingCost, detailedDebug);
+	Timeline AGscheduled = ScheduleGeneral(processesAG, processNum, true, criteria_AGING, contextSwitchingCost, detailedDebug, "CustomizedAging-preemptive");
 	GanttChart(&AGscheduled, "CustomizedAging-preemptive");
 	
 	// RR
 	Process *processesRR = deepCopyProcesses(processes, processNum);
-	Timeline RRscheduled = ScheduleGeneral(processesRR, processNum, false, criteria_RR, contextSwitchingCost, detailedDebug);
+	Timeline RRscheduled = ScheduleGeneral(processesRR, processNum, false, criteria_RR, contextSwitchingCost, detailedDebug, "RoundRobin");
 	GanttChart(&RRscheduled, "RoundRobin");
 	printf("Round Robin Quantum time = %d\n", globalRRQuantumTime);
 	
 	// Priority dynamic preemptive
 	Process *processesPDP = deepCopyProcesses(processes, processNum);
-	Timeline PDPscheduled = ScheduleGeneral(processesPDP, processNum, true, criteria_PDy, contextSwitchingCost, detailedDebug);
+	Timeline PDPscheduled = ScheduleGeneral(processesPDP, processNum, true, criteria_PDy, contextSwitchingCost, detailedDebug, "DynamicPriority-preemptive");
 	GanttChart(&PDPscheduled, "DynamicPriority-preemptive");
 }
 
