@@ -17,7 +17,7 @@
 		(o) - Evaluation: Calculate average waiting time, turnaround time
 			- Additional features
 				(o) - Dynamically changing priorities
-				(o) - Aging priorities (Preemptive, Non-preemptive)
+				(o) - Generalized formula based aging method (Preemptive, Non-preemptive)
 				(o) - Context switching cost (Generalized adaptivity)
 */
 
